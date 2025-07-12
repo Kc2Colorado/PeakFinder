@@ -91,9 +91,38 @@
             width: 20px; height: 20px; background: #3b82f6;
             cursor: pointer; border-radius: 50%; border: 2px solid white;
         }
-        input[type="range"]::-moz-range-thumb {
-            width: 16px; height: 16px; background: #3b82f6;
-            cursor: pointer; border-radius: 50%; border: 2px solid white;
+        /* NEW: Compass Rose Styling */
+        #compass-rose {
+            position: absolute;
+            top: 80px; /* Position below top controls */
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            background-color: rgba(0,0,0,0.4);
+            border-radius: 50%;
+            border: 1px solid rgba(255,255,255,0.3);
+            z-index: 3;
+            transition: transform 0.2s linear;
+        }
+        #compass-needle {
+            width: 0;
+            height: 0;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+            border-bottom: 20px solid #ef4444; /* Red */
+            position: absolute;
+            top: 8px;
+            left: 24px;
+        }
+         #compass-letter {
+            position: absolute;
+            width: 100%;
+            text-align: center;
+            top: 35px;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+            text-shadow: 0 0 2px black;
         }
     </style>
 </head>
@@ -109,6 +138,11 @@
 
     <video id="camera-feed" playsinline autoplay muted></video>
     <div id="ar-overlay"></div>
+    <!-- NEW: Compass Rose -->
+    <div id="compass-rose" class="hidden">
+        <div id="compass-needle"></div>
+        <div id="compass-letter">N</div>
+    </div>
 
     <div id="top-controls" class="hidden">
         <div class="grid grid-cols-3 items-center gap-x-4 max-w-4xl mx-auto">
@@ -127,7 +161,6 @@
                     <option value="detailed">Detailed</option>
                 </select>
             </div>
-            <!-- NEW: Distance Filter -->
             <div class="flex flex-col items-center justify-center">
                  <div class="flex justify-between w-full text-white text-sm">
                     <label for="distance-slider">Range</label>
@@ -157,6 +190,7 @@
         const labelStyleSelect = document.getElementById('label-style-select');
         const distanceSlider = document.getElementById('distance-slider');
         const distanceValue = document.getElementById('distance-value');
+        const compassRose = document.getElementById('compass-rose');
 
         // --- STATE & CONSTANTS ---
         let userPosition = null;
@@ -185,6 +219,7 @@
                 startContainer.style.display = 'none';
                 topControls.classList.remove('hidden');
                 statusBar.classList.remove('hidden');
+                compassRose.classList.remove('hidden');
                 window.requestAnimationFrame(updatePeakView);
             } catch (err) {
                 startMessage.innerHTML = `<p class="text-red-400 text-center">Error: ${err.message}. Please enable all permissions in your browser settings and refresh.</p>`;
@@ -235,21 +270,20 @@
         // --- CORE AR LOGIC ---
         function updatePeakView() {
             let gpsStatus = userPosition ? 'OK' : 'Waiting';
-            let compassStatus = phoneHeading !== null ? 'OK' : 'Waiting';
+            let compassStatus = phoneHeading !== null ? `OK(${Math.round(phoneHeading)}°)` : 'Waiting';
             let visibleCount = 0;
             let inRangeCount = 0;
             
             if (phoneHeading !== null && userPosition !== null) {
                 arOverlay.innerHTML = '';
+                compassRose.style.transform = `rotate(${-phoneHeading}deg)`;
 
-                // 1. Filter by distance first for performance
                 const peaksInRange = peaks.filter(p => {
                     const dist = calculateDistance(userPosition.lat, userPosition.lon, p.lat, p.lon);
                     return dist <= maxDistance;
                 });
                 inRangeCount = peaksInRange.length;
 
-                // 2. Process remaining peaks
                 const processedPeaks = peaksInRange.map(peak => {
                     const distanceKm = calculateDistance(userPosition.lat, userPosition.lon, peak.lat, peak.lon);
                     const bearing = calculateBearing(userPosition.lat, userPosition.lon, peak.lat, peak.lon);
@@ -257,11 +291,9 @@
                     return { ...peak, distanceKm, bearing, angularElevation };
                 });
 
-                // 3. Check for occlusion
                 const visiblePeaks = getVisiblePeaks(processedPeaks);
                 visibleCount = visiblePeaks.length;
 
-                // 4. Render visible peaks in FOV
                 visiblePeaks.forEach(peak => {
                     const horizontalAngleDiff = getAngleDifference(phoneHeading, peak.bearing);
                     const verticalAngleDiff = phonePitch - peak.angularElevation;
@@ -273,7 +305,6 @@
                     }
                 });
             }
-            // Update debug status
             debugStatusEl.textContent = `GPS:${gpsStatus} | Compass:${compassStatus} | Range:${inRangeCount} | Visible:${visibleCount}`;
             window.requestAnimationFrame(updatePeakView);
         }
@@ -343,7 +374,6 @@
             unitKmBtn.classList.toggle('text-white', unit === 'km');
             unitMiBtn.classList.toggle('bg-blue-600', unit === 'mi');
             unitMiBtn.classList.toggle('text-white', unit === 'mi');
-            // Update distance slider text when units change
             const dist = maxDistance;
             const displayDist = unit === 'mi' ? (dist * 0.621371).toFixed(0) : dist;
             distanceValue.textContent = `${displayDist} ${unit}`;
