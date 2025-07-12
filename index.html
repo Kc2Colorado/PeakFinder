@@ -7,7 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Roboto+Mono:wght@400&display=swap" rel="stylesheet">
     <style>
         body {
             font-family: 'Inter', sans-serif;
@@ -57,7 +57,7 @@
             background-color: rgba(0, 0, 0, 0.5);
             backdrop-filter: blur(10px);
             z-index: 3;
-            padding: 12px;
+            padding: 8px 12px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.2);
         }
         #status-bar {
@@ -70,8 +70,8 @@
             z-index: 3;
             padding: 8px 16px;
             border-top: 1px solid rgba(255, 255, 255, 0.2);
-            font-family: monospace;
-            font-size: 12px;
+            font-family: 'Roboto Mono', monospace;
+            font-size: 10px;
             color: #e5e7eb;
             text-align: center;
         }
@@ -79,6 +79,21 @@
             background-color: #4a5568;
             color: white;
             border: 1px solid #718096;
+        }
+        input[type="range"] {
+            -webkit-appearance: none; appearance: none;
+            width: 100%; height: 6px; background: #4a5568;
+            border-radius: 3px; outline: none;
+            vertical-align: middle;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none;
+            width: 20px; height: 20px; background: #3b82f6;
+            cursor: pointer; border-radius: 50%; border: 2px solid white;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 16px; height: 16px; background: #3b82f6;
+            cursor: pointer; border-radius: 50%; border: 2px solid white;
         }
     </style>
 </head>
@@ -96,15 +111,15 @@
     <div id="ar-overlay"></div>
 
     <div id="top-controls" class="hidden">
-        <div class="flex justify-center items-center gap-6 max-w-4xl mx-auto">
-             <div class="flex items-center gap-2">
+        <div class="grid grid-cols-3 items-center gap-x-4 max-w-4xl mx-auto">
+             <div class="flex items-center justify-center gap-2">
                 <label class="text-white text-sm">Units</label>
                 <div class="flex items-center bg-gray-700 rounded-full p-1">
                     <button id="unit-km" class="px-3 py-1 text-xs rounded-full bg-blue-600 text-white">km</button>
                     <button id="unit-mi" class="px-3 py-1 text-xs rounded-full text-gray-300">mi</button>
                 </div>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center justify-center gap-2">
                 <label for="label-style-select" class="text-white text-sm">Labels</label>
                 <select id="label-style-select" class="custom-select p-1 rounded-md text-xs">
                     <option value="standard">Standard</option>
@@ -112,12 +127,19 @@
                     <option value="detailed">Detailed</option>
                 </select>
             </div>
+            <!-- NEW: Distance Filter -->
+            <div class="flex flex-col items-center justify-center">
+                 <div class="flex justify-between w-full text-white text-sm">
+                    <label for="distance-slider">Range</label>
+                    <span id="distance-value">150 km</span>
+                </div>
+                <input type="range" id="distance-slider" min="0" max="150" value="150" step="5">
+            </div>
         </div>
     </div>
 
     <div id="status-bar" class="hidden">
-        <span id="gps-status">GPS: Waiting...</span> | 
-        <span id="heading-status">Compass: Waiting...</span>
+        <span id="debug-status">GPS: Waiting... | Compass: Waiting...</span>
     </div>
 
     <script>
@@ -129,11 +151,12 @@
         const arOverlay = document.getElementById('ar-overlay');
         const topControls = document.getElementById('top-controls');
         const statusBar = document.getElementById('status-bar');
-        const gpsStatusEl = document.getElementById('gps-status');
-        const headingStatusEl = document.getElementById('heading-status');
+        const debugStatusEl = document.getElementById('debug-status');
         const unitKmBtn = document.getElementById('unit-km');
         const unitMiBtn = document.getElementById('unit-mi');
         const labelStyleSelect = document.getElementById('label-style-select');
+        const distanceSlider = document.getElementById('distance-slider');
+        const distanceValue = document.getElementById('distance-value');
 
         // --- STATE & CONSTANTS ---
         let userPosition = null;
@@ -141,6 +164,7 @@
         let phonePitch = 0;
         let currentUnits = 'km';
         let currentLabelStyle = 'standard';
+        let maxDistance = 150; // km
         const HORIZONTAL_FOV = 60;
         const VERTICAL_FOV = 45;
 
@@ -153,27 +177,17 @@
         async function startApp() {
             startMessage.textContent = "Requesting permissions...";
             try {
-                // 1. Start camera
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
                 video.srcObject = stream;
                 video.play();
-
-                // 2. Request orientation sensor
                 await requestOrientationPermission();
-
-                // 3. Start GPS
                 startGps();
-
-                // 4. Show UI
                 startContainer.style.display = 'none';
                 topControls.classList.remove('hidden');
                 statusBar.classList.remove('hidden');
-                
-                // 5. Start render loop
                 window.requestAnimationFrame(updatePeakView);
-
             } catch (err) {
-                startMessage.innerHTML = `<p class="text-red-400 text-center">Error: ${err.message}. Please enable camera & sensor permissions in your browser settings and refresh.</p>`;
+                startMessage.innerHTML = `<p class="text-red-400 text-center">Error: ${err.message}. Please enable all permissions in your browser settings and refresh.</p>`;
             }
         }
         
@@ -181,14 +195,8 @@
             return new Promise((resolve, reject) => {
                 if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                     DeviceOrientationEvent.requestPermission()
-                        .then(permissionState => {
-                            if (permissionState === 'granted') {
-                                window.addEventListener('deviceorientationabsolute', handleOrientation);
-                                resolve();
-                            } else {
-                                reject(new Error('Compass permission denied.'));
-                            }
-                        }).catch(reject);
+                        .then(state => state === 'granted' ? (window.addEventListener('deviceorientationabsolute', handleOrientation), resolve()) : reject(new Error('Compass permission denied.')))
+                        .catch(reject);
                 } else {
                     window.addEventListener('deviceorientationabsolute', handleOrientation);
                     resolve();
@@ -198,9 +206,9 @@
 
         function startGps() {
             if ('geolocation' in navigator) {
-                navigator.geolocation.watchPosition(handleGpsSuccess, handleGpsError, { enableHighAccuracy: true });
+                navigator.geolocation.watchPosition(handleGpsSuccess, handleGpsError, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
             } else {
-                gpsStatusEl.textContent = 'GPS: Not Supported';
+                debugStatusEl.textContent = 'GPS Not Supported';
             }
         }
 
@@ -209,9 +217,6 @@
             if (event.alpha !== null) {
                 phoneHeading = event.alpha;
                 phonePitch = event.beta;
-                headingStatusEl.textContent = `Compass: OK`;
-            } else {
-                 headingStatusEl.textContent = `Compass: No Data`;
             }
         }
 
@@ -219,28 +224,44 @@
             userPosition = {
                 lat: position.coords.latitude,
                 lon: position.coords.longitude,
-                alt: position.coords.altitude || userPosition?.alt || 0 // Use last known altitude if current is null
+                alt: position.coords.altitude || 3000 // Fallback altitude
             };
-            gpsStatusEl.textContent = `GPS: OK`;
         }
 
         function handleGpsError(error) {
-            gpsStatusEl.textContent = `GPS: Error`;
+            console.error("GPS Error:", error.message);
         }
 
         // --- CORE AR LOGIC ---
         function updatePeakView() {
+            let gpsStatus = userPosition ? 'OK' : 'Waiting';
+            let compassStatus = phoneHeading !== null ? 'OK' : 'Waiting';
+            let visibleCount = 0;
+            let inRangeCount = 0;
+            
             if (phoneHeading !== null && userPosition !== null) {
                 arOverlay.innerHTML = '';
-                const processedPeaks = peaks.map(peak => {
+
+                // 1. Filter by distance first for performance
+                const peaksInRange = peaks.filter(p => {
+                    const dist = calculateDistance(userPosition.lat, userPosition.lon, p.lat, p.lon);
+                    return dist <= maxDistance;
+                });
+                inRangeCount = peaksInRange.length;
+
+                // 2. Process remaining peaks
+                const processedPeaks = peaksInRange.map(peak => {
                     const distanceKm = calculateDistance(userPosition.lat, userPosition.lon, peak.lat, peak.lon);
                     const bearing = calculateBearing(userPosition.lat, userPosition.lon, peak.lat, peak.lon);
                     const angularElevation = calculateAngularElevation(peak.elevation, userPosition.alt, distanceKm);
                     return { ...peak, distanceKm, bearing, angularElevation };
                 });
 
+                // 3. Check for occlusion
                 const visiblePeaks = getVisiblePeaks(processedPeaks);
+                visibleCount = visiblePeaks.length;
 
+                // 4. Render visible peaks in FOV
                 visiblePeaks.forEach(peak => {
                     const horizontalAngleDiff = getAngleDifference(phoneHeading, peak.bearing);
                     const verticalAngleDiff = phonePitch - peak.angularElevation;
@@ -252,6 +273,8 @@
                     }
                 });
             }
+            // Update debug status
+            debugStatusEl.textContent = `GPS:${gpsStatus} | Compass:${compassStatus} | Range:${inRangeCount} | Visible:${visibleCount}`;
             window.requestAnimationFrame(updatePeakView);
         }
 
@@ -262,7 +285,7 @@
                 for (const occluder of processedPeaks) {
                     if (target.name === occluder.name || occluder.distanceKm >= target.distanceKm) continue;
                     const bearingDiff = Math.abs(getAngleDifference(target.bearing, occluder.bearing));
-                    const angularWidth = 150 / occluder.distanceKm;
+                    const angularWidth = 120 / occluder.distanceKm; 
                     if (bearingDiff < angularWidth && occluder.angularElevation > target.angularElevation) {
                         isOccluded = true;
                         break;
@@ -279,8 +302,8 @@
             label.style.left = `${x}%`;
             label.style.top = `${y}%`;
 
-            const maxDist = 150, minDist = 10;
-            const opacity = Math.max(0.3, 1.0 - (peak.distanceKm - minDist) / (maxDist - minDist));
+            const maxDistOpacity = 150, minDistOpacity = 10;
+            const opacity = Math.max(0.3, 1.0 - (peak.distanceKm - minDistOpacity) / (maxDistOpacity - minDistOpacity));
             label.style.opacity = opacity;
 
             const name = peak.name;
@@ -305,6 +328,13 @@
             unitKmBtn.addEventListener('click', () => setUnits('km'));
             unitMiBtn.addEventListener('click', () => setUnits('mi'));
             labelStyleSelect.addEventListener('change', (e) => { currentLabelStyle = e.target.value; });
+            distanceSlider.addEventListener('input', (e) => {
+                maxDistance = parseInt(e.target.value);
+                const dist = maxDistance;
+                const unit = currentUnits;
+                const displayDist = unit === 'mi' ? (dist * 0.621371).toFixed(0) : dist;
+                distanceValue.textContent = `${displayDist} ${unit}`;
+            });
         }
         
         function setUnits(unit) {
@@ -313,6 +343,10 @@
             unitKmBtn.classList.toggle('text-white', unit === 'km');
             unitMiBtn.classList.toggle('bg-blue-600', unit === 'mi');
             unitMiBtn.classList.toggle('text-white', unit === 'mi');
+            // Update distance slider text when units change
+            const dist = maxDistance;
+            const displayDist = unit === 'mi' ? (dist * 0.621371).toFixed(0) : dist;
+            distanceValue.textContent = `${displayDist} ${unit}`;
         }
 
         // --- HELPER FUNCTIONS ---
@@ -344,3 +378,4 @@
     </script>
 </body>
 </html>
+
