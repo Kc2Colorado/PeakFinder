@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>PeakFinder - Live</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overscroll-behavior: none;
+            touch-action: none;
+        }
+        #camera-feed {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 1;
+        }
+        #ar-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none;
+        }
+        .peak-label {
+            position: absolute;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            font-size: 14px;
+            white-space: nowrap;
+            transform: translate(-50%, -50%);
+            transition: top 0.1s linear, left 0.1s linear, opacity 0.2s linear;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+        }
+        .peak-label .detail {
+            font-size: 12px;
+            color: #a7f3d0;
+        }
+        #top-controls {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+            z-index: 3;
+            padding: 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        #status-bar {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            z-index: 3;
+            padding: 8px 16px;
+            border-top: 1px solid rgba(255, 255, 255, 0.2);
+            font-family: monospace;
+            font-size: 12px;
+            color: #e5e7eb;
+            text-align: center;
+        }
+        .custom-select {
+            background-color: #4a5568;
+            color: white;
+            border: 1px solid #718096;
+        }
+    </style>
+</head>
+<body class="bg-black overflow-hidden">
+
+    <div id="start-container" class="absolute inset-0 z-10 flex flex-col items-center justify-center bg-gray-900 p-4">
+        <h1 class="text-3xl font-bold text-white">AR PeakFinder</h1>
+        <p id="start-message" class="text-gray-300 mt-2 mb-8 text-center">Point your phone at the mountains to identify them.</p>
+        <button id="start-btn" class="w-full max-w-xs bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-transform transform active:scale-95">
+            Start
+        </button>
+    </div>
+
+    <video id="camera-feed" playsinline autoplay muted></video>
+    <div id="ar-overlay"></div>
+
+    <div id="top-controls" class="hidden">
+        <div class="flex justify-center items-center gap-6 max-w-4xl mx-auto">
+             <div class="flex items-center gap-2">
+                <label class="text-white text-sm">Units</label>
+                <div class="flex items-center bg-gray-700 rounded-full p-1">
+                    <button id="unit-km" class="px-3 py-1 text-xs rounded-full bg-blue-600 text-white">km</button>
+                    <button id="unit-mi" class="px-3 py-1 text-xs rounded-full text-gray-300">mi</button>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <label for="label-style-select" class="text-white text-sm">Labels</label>
+                <select id="label-style-select" class="custom-select p-1 rounded-md text-xs">
+                    <option value="standard">Standard</option>
+                    <option value="minimal">Minimal</option>
+                    <option value="detailed">Detailed</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <div id="status-bar" class="hidden">
+        <span id="gps-status">GPS: Waiting...</span> | 
+        <span id="heading-status">Compass: Waiting...</span>
+    </div>
+
+    <script>
+        // --- DOM ELEMENTS ---
+        const startContainer = document.getElementById('start-container');
+        const startBtn = document.getElementById('start-btn');
+        const startMessage = document.getElementById('start-message');
+        const video = document.getElementById('camera-feed');
+        const arOverlay = document.getElementById('ar-overlay');
+        const topControls = document.getElementById('top-controls');
+        const statusBar = document.getElementById('status-bar');
+        const gpsStatusEl = document.getElementById('gps-status');
+        const headingStatusEl = document.getElementById('heading-status');
+        const unitKmBtn = document.getElementById('unit-km');
+        const unitMiBtn = document.getElementById('unit-mi');
+        const labelStyleSelect = document.getElementById('label-style-select');
+
+        // --- STATE & CONSTANTS ---
+        let userPosition = null;
+        let phoneHeading = null;
+        let phonePitch = 0;
+        let currentUnits = 'km';
+        let currentLabelStyle = 'standard';
+        const HORIZONTAL_FOV = 60;
+        const VERTICAL_FOV = 45;
+
+        // --- DATA SOURCE ---
+        const peaks = [
+            { name: "Mt. Elbert", lat: 39.1178, lon: -106.4454, elevation: 4401.2 }, { name: "Mt. Massive", lat: 39.1875, lon: -106.4757, elevation: 4398 }, { name: "Mt. Harvard", lat: 38.9244, lon: -106.3207, elevation: 4395 }, { name: "Blanca Peak", lat: 37.5775, lon: -105.4856, elevation: 4374 }, { name: "La Plata Peak", lat: 39.0294, lon: -106.4729, elevation: 4379 }, { name: "Uncompahgre Peak", lat: 38.0717, lon: -107.4621, elevation: 4365 }, { name: "Crestone Peak", lat: 37.9669, lon: -105.5855, elevation: 4359 }, { name: "Mt. Lincoln", lat: 39.3514, lon: -106.1116, elevation: 4357 }, { name: "Grays Peak", lat: 39.6339, lon: -105.8176, elevation: 4352 }, { name: "Mt. Antero", lat: 38.6739, lon: -106.2462, elevation: 4351 }, { name: "Torreys Peak", lat: 39.6428, lon: -105.8212, elevation: 4351 }, { name: "Castle Peak", lat: 39.0097, lon: -106.8614, elevation: 4350 }, { name: "Quandary Peak", lat: 39.3973, lon: -106.1064, elevation: 4350 }, { name: "Mt. Evans", lat: 39.5883, lon: -105.6438, elevation: 4348 }, { name: "Longs Peak", lat: 40.2549, lon: -105.6151, elevation: 4346 }, { name: "Mt. Wilson", lat: 37.8395, lon: -107.9916, elevation: 4344 }, { name: "Mt. Shavano", lat: 38.6192, lon: -106.2393, elevation: 4338 }, { name: "Mt. Princeton", lat: 38.7492, lon: -106.2421, elevation: 4329 }, { name: "Mt. Yale", lat: 38.8443, lon: -106.3137, elevation: 4328 }, { name: "Crestone Needle", lat: 37.9647, lon: -105.5766, elevation: 4327 }, { name: "Mt. Bross", lat: 39.335, lon: -106.1077, elevation: 4321 }, { name: "Kit Carson Peak", lat: 37.9797, lon: -105.6026, elevation: 4319 }, { name: "Maroon Peak", lat: 39.0708, lon: -106.989, elevation: 4317 }, { name: "Tabeguache Peak", lat: 38.625, lon: -106.2506, elevation: 4315 }, { name: "Mt. Oxford", lat: 38.9644, lon: -106.3388, elevation: 4314 }, { name: "Mt. Sneffels", lat: 38.0036, lon: -107.7923, elevation: 4313 }, { name: "Mt. Democrat", lat: 39.3396, lon: -106.1396, elevation: 4312 }, { name: "Capitol Peak", lat: 39.1503, lon: -107.083, elevation: 4309 }, { name: "Pikes Peak", lat: 38.8405, lon: -105.0442, elevation: 4302 }, { name: "Snowmass Mountain", lat: 39.1188, lon: -107.0665, elevation: 4295 }, { name: "Windom Peak", lat: 37.6212, lon: -107.5919, elevation: 4294 }, { name: "Mt. Eolus", lat: 37.6224, lon: -107.6222, elevation: 4293 }, { name: "Challenger Point", lat: 37.9804, lon: -105.6067, elevation: 4292 }, { name: "Mt. Columbia", lat: 38.9038, lon: -106.2975, elevation: 4291 }, { name: "Missouri Mountain", lat: 38.9472, lon: -106.3789, elevation: 4290 }, { name: "Humboldt Peak", lat: 37.9762, lon: -105.5552, elevation: 4287 }, { name: "Mt. Bierstadt", lat: 39.5826, lon: -105.6688, elevation: 4287 }, { name: "Sunlight Peak", lat: 37.6274, lon: -107.5959, elevation: 4287 }, { name: "Handies Peak", lat: 37.913, lon: -107.5046, elevation: 4285 }, { name: "Culebra Peak", lat: 37.1223, lon: -105.1857, elevation: 4283 }, { name: "Ellingwood Point", lat: 37.5826, lon: -105.4926, elevation: 4282 }, { name: "Mt. Lindsey", lat: 37.5839, lon: -105.4454, elevation: 4281 }, { name: "Little Bear Peak", lat: 37.5668, lon: -105.4972, elevation: 4279 }, { name: "Mt. Sherman", lat: 39.225, lon: -106.1698, elevation: 4280 }, { name: "Redcloud Peak", lat: 37.941, lon: -107.422, elevation: 4278 }, { name: "Pyramid Peak", lat: 39.0716, lon: -106.9502, elevation: 4273 }, { name: "Wilson Peak", lat: 37.86, lon: -108.0053, elevation: 4272 }, { name: "Wetterhorn Peak", lat: 38.0607, lon: -107.5109, elevation: 4272 }, { name: "San Luis Peak", lat: 37.9869, lon: -106.9316, elevation: 4271 }, { name: "Mt. of the Holy Cross", lat: 39.4669, lon: -106.4817, elevation: 4271 }, { name: "Huron Peak", lat: 38.9455, lon: -106.4381, elevation: 4270 }, { name: "Sunshine Peak", lat: 37.9226, lon: -107.4256, elevation: 4267 },
+        ];
+
+        // --- SENSOR & APP INITIALIZATION ---
+        async function startApp() {
+            startMessage.textContent = "Requesting permissions...";
+            try {
+                // 1. Start camera
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                video.srcObject = stream;
+                video.play();
+
+                // 2. Request orientation sensor
+                await requestOrientationPermission();
+
+                // 3. Start GPS
+                startGps();
+
+                // 4. Show UI
+                startContainer.style.display = 'none';
+                topControls.classList.remove('hidden');
+                statusBar.classList.remove('hidden');
+                
+                // 5. Start render loop
+                window.requestAnimationFrame(updatePeakView);
+
+            } catch (err) {
+                startMessage.innerHTML = `<p class="text-red-400 text-center">Error: ${err.message}. Please enable camera & sensor permissions in your browser settings and refresh.</p>`;
+            }
+        }
+        
+        function requestOrientationPermission() {
+            return new Promise((resolve, reject) => {
+                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    DeviceOrientationEvent.requestPermission()
+                        .then(permissionState => {
+                            if (permissionState === 'granted') {
+                                window.addEventListener('deviceorientationabsolute', handleOrientation);
+                                resolve();
+                            } else {
+                                reject(new Error('Compass permission denied.'));
+                            }
+                        }).catch(reject);
+                } else {
+                    window.addEventListener('deviceorientationabsolute', handleOrientation);
+                    resolve();
+                }
+            });
+        }
+
+        function startGps() {
+            if ('geolocation' in navigator) {
+                navigator.geolocation.watchPosition(handleGpsSuccess, handleGpsError, { enableHighAccuracy: true });
+            } else {
+                gpsStatusEl.textContent = 'GPS: Not Supported';
+            }
+        }
+
+        // --- SENSOR HANDLERS ---
+        function handleOrientation(event) {
+            if (event.alpha !== null) {
+                phoneHeading = event.alpha;
+                phonePitch = event.beta;
+                headingStatusEl.textContent = `Compass: OK`;
+            } else {
+                 headingStatusEl.textContent = `Compass: No Data`;
+            }
+        }
+
+        function handleGpsSuccess(position) {
+            userPosition = {
+                lat: position.coords.latitude,
+                lon: position.coords.longitude,
+                alt: position.coords.altitude || userPosition?.alt || 0 // Use last known altitude if current is null
+            };
+            gpsStatusEl.textContent = `GPS: OK`;
+        }
+
+        function handleGpsError(error) {
+            gpsStatusEl.textContent = `GPS: Error`;
+        }
+
+        // --- CORE AR LOGIC ---
+        function updatePeakView() {
+            if (phoneHeading !== null && userPosition !== null) {
+                arOverlay.innerHTML = '';
+                const processedPeaks = peaks.map(peak => {
+                    const distanceKm = calculateDistance(userPosition.lat, userPosition.lon, peak.lat, peak.lon);
+                    const bearing = calculateBearing(userPosition.lat, userPosition.lon, peak.lat, peak.lon);
+                    const angularElevation = calculateAngularElevation(peak.elevation, userPosition.alt, distanceKm);
+                    return { ...peak, distanceKm, bearing, angularElevation };
+                });
+
+                const visiblePeaks = getVisiblePeaks(processedPeaks);
+
+                visiblePeaks.forEach(peak => {
+                    const horizontalAngleDiff = getAngleDifference(phoneHeading, peak.bearing);
+                    const verticalAngleDiff = phonePitch - peak.angularElevation;
+
+                    if (Math.abs(horizontalAngleDiff) < HORIZONTAL_FOV / 2 && Math.abs(verticalAngleDiff) < VERTICAL_FOV / 2) {
+                        const x = 50 + (horizontalAngleDiff / (HORIZONTAL_FOV / 2)) * 50;
+                        const y = 50 - (verticalAngleDiff / (VERTICAL_FOV / 2)) * 50;
+                        createLabel(peak, x, y);
+                    }
+                });
+            }
+            window.requestAnimationFrame(updatePeakView);
+        }
+
+        function getVisiblePeaks(processedPeaks) {
+            const visible = [];
+            processedPeaks.forEach(target => {
+                let isOccluded = false;
+                for (const occluder of processedPeaks) {
+                    if (target.name === occluder.name || occluder.distanceKm >= target.distanceKm) continue;
+                    const bearingDiff = Math.abs(getAngleDifference(target.bearing, occluder.bearing));
+                    const angularWidth = 150 / occluder.distanceKm;
+                    if (bearingDiff < angularWidth && occluder.angularElevation > target.angularElevation) {
+                        isOccluded = true;
+                        break;
+                    }
+                }
+                if (!isOccluded) visible.push(target);
+            });
+            return visible;
+        }
+
+        function createLabel(peak, x, y) {
+            const label = document.createElement('div');
+            label.className = 'peak-label';
+            label.style.left = `${x}%`;
+            label.style.top = `${y}%`;
+
+            const maxDist = 150, minDist = 10;
+            const opacity = Math.max(0.3, 1.0 - (peak.distanceKm - minDist) / (maxDist - minDist));
+            label.style.opacity = opacity;
+
+            const name = peak.name;
+            let details = '';
+
+            if (currentLabelStyle !== 'minimal') {
+                const dist = currentUnits === 'mi' ? (peak.distanceKm * 0.621371).toFixed(1) : peak.distanceKm.toFixed(1);
+                details += `<span class="detail">${dist} ${currentUnits} away</span>`;
+            }
+            if (currentLabelStyle === 'detailed') {
+                const elev = currentUnits === 'mi' ? (peak.elevation * 3.28084).toFixed(0) : peak.elevation.toFixed(0);
+                details = `<span class="detail">${elev} ${currentUnits === 'mi' ? 'ft' : 'm'}</span><br>` + details;
+            }
+
+            label.innerHTML = `${name}<br>${details}`;
+            arOverlay.appendChild(label);
+        }
+        
+        // --- UI BINDING ---
+        function setupEventListeners() {
+            startBtn.addEventListener('click', startApp);
+            unitKmBtn.addEventListener('click', () => setUnits('km'));
+            unitMiBtn.addEventListener('click', () => setUnits('mi'));
+            labelStyleSelect.addEventListener('change', (e) => { currentLabelStyle = e.target.value; });
+        }
+        
+        function setUnits(unit) {
+            currentUnits = unit;
+            unitKmBtn.classList.toggle('bg-blue-600', unit === 'km');
+            unitKmBtn.classList.toggle('text-white', unit === 'km');
+            unitMiBtn.classList.toggle('bg-blue-600', unit === 'mi');
+            unitMiBtn.classList.toggle('text-white', unit === 'mi');
+        }
+
+        // --- HELPER FUNCTIONS ---
+        function degreesToRadians(degrees) { return degrees * Math.PI / 180; }
+        function calculateBearing(lat1, lon1, lat2, lon2) {
+            const y = Math.sin(degreesToRadians(lon2 - lon1)) * Math.cos(degreesToRadians(lat2));
+            const x = Math.cos(degreesToRadians(lat1)) * Math.sin(degreesToRadians(lat2)) - Math.sin(degreesToRadians(lat1)) * Math.cos(degreesToRadians(lat2)) * Math.cos(degreesToRadians(lon2 - lon1));
+            return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+        }
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = degreesToRadians(lat2 - lat1);
+            const dLon = degreesToRadians(lon2 - lon1);
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(degreesToRadians(lat1)) * Math.cos(degreesToRadians(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+        }
+        function calculateAngularElevation(peakElev, userAlt, distKm) {
+            return Math.atan2(peakElev - userAlt, distKm * 1000) * 180 / Math.PI;
+        }
+        function getAngleDifference(a1, a2) {
+            let diff = a1 - a2;
+            if (diff > 180) diff -= 360;
+            if (diff < -180) diff += 360;
+            return diff;
+        }
+        
+        // --- STARTUP ---
+        setupEventListeners();
+    </script>
+</body>
+</html>
