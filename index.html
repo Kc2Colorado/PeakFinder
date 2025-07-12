@@ -91,10 +91,9 @@
             width: 20px; height: 20px; background: #3b82f6;
             cursor: pointer; border-radius: 50%; border: 2px solid white;
         }
-        /* NEW: Compass Rose Styling */
         #compass-rose {
             position: absolute;
-            top: 80px; /* Position below top controls */
+            top: 120px; 
             right: 20px;
             width: 60px;
             height: 60px;
@@ -105,24 +104,21 @@
             transition: transform 0.2s linear;
         }
         #compass-needle {
-            width: 0;
-            height: 0;
+            width: 0; height: 0;
             border-left: 6px solid transparent;
             border-right: 6px solid transparent;
-            border-bottom: 20px solid #ef4444; /* Red */
-            position: absolute;
-            top: 8px;
-            left: 24px;
+            border-bottom: 20px solid #ef4444;
+            position: absolute; top: 8px; left: 24px;
         }
          #compass-letter {
-            position: absolute;
-            width: 100%;
-            text-align: center;
-            top: 35px;
-            color: white;
-            font-weight: bold;
-            font-size: 14px;
+            position: absolute; width: 100%;
+            text-align: center; top: 35px;
+            color: white; font-weight: bold; font-size: 14px;
             text-shadow: 0 0 2px black;
+        }
+        .control-btn-group button.active {
+            background-color: #3b82f6;
+            color: white;
         }
     </style>
 </head>
@@ -138,30 +134,40 @@
 
     <video id="camera-feed" playsinline autoplay muted></video>
     <div id="ar-overlay"></div>
-    <!-- NEW: Compass Rose -->
     <div id="compass-rose" class="hidden">
         <div id="compass-needle"></div>
         <div id="compass-letter">N</div>
     </div>
 
     <div id="top-controls" class="hidden">
-        <div class="grid grid-cols-3 items-center gap-x-4 max-w-4xl mx-auto">
-             <div class="flex items-center justify-center gap-2">
-                <label class="text-white text-sm">Units</label>
-                <div class="flex items-center bg-gray-700 rounded-full p-1">
-                    <button id="unit-km" class="px-3 py-1 text-xs rounded-full bg-blue-600 text-white">km</button>
-                    <button id="unit-mi" class="px-3 py-1 text-xs rounded-full text-gray-300">mi</button>
+        <div class="space-y-2 max-w-4xl mx-auto">
+            <div class="grid grid-cols-3 items-center gap-x-4">
+                 <div class="flex items-center justify-center gap-2">
+                    <label class="text-white text-sm">Units</label>
+                    <div class="flex items-center bg-gray-700 rounded-full p-1 control-btn-group">
+                        <button id="unit-km" class="px-3 py-1 text-xs rounded-full active">km</button>
+                        <button id="unit-mi" class="px-3 py-1 text-xs rounded-full text-gray-300">mi</button>
+                    </div>
+                </div>
+                <div class="flex items-center justify-center gap-2">
+                    <label for="label-style-select" class="text-white text-sm">Labels</label>
+                    <select id="label-style-select" class="custom-select p-1 rounded-md text-xs">
+                        <option value="standard">Standard</option>
+                        <option value="minimal">Minimal</option>
+                        <option value="detailed">Detailed</option>
+                    </select>
+                </div>
+                <!-- NEW: Vertical Placement -->
+                <div class="flex items-center justify-center gap-2">
+                    <label class="text-white text-sm">Height</label>
+                    <div id="placement-controls" class="flex items-center bg-gray-700 rounded-full p-1 control-btn-group">
+                        <button data-value="sky" class="px-2 py-1 text-xs rounded-full text-gray-300">Sky</button>
+                        <button data-value="mid" class="px-2 py-1 text-xs rounded-full active">Mid</button>
+                        <button data-value="ground" class="px-2 py-1 text-xs rounded-full text-gray-300">Ground</button>
+                    </div>
                 </div>
             </div>
-            <div class="flex items-center justify-center gap-2">
-                <label for="label-style-select" class="text-white text-sm">Labels</label>
-                <select id="label-style-select" class="custom-select p-1 rounded-md text-xs">
-                    <option value="standard">Standard</option>
-                    <option value="minimal">Minimal</option>
-                    <option value="detailed">Detailed</option>
-                </select>
-            </div>
-            <div class="flex flex-col items-center justify-center">
+             <div class="flex flex-col items-center justify-center px-4">
                  <div class="flex justify-between w-full text-white text-sm">
                     <label for="distance-slider">Range</label>
                     <span id="distance-value">150 km</span>
@@ -191,6 +197,7 @@
         const distanceSlider = document.getElementById('distance-slider');
         const distanceValue = document.getElementById('distance-value');
         const compassRose = document.getElementById('compass-rose');
+        const placementControls = document.getElementById('placement-controls');
 
         // --- STATE & CONSTANTS ---
         let userPosition = null;
@@ -199,8 +206,10 @@
         let currentUnits = 'km';
         let currentLabelStyle = 'standard';
         let maxDistance = 150; // km
-        const HORIZONTAL_FOV = 60;
-        const VERTICAL_FOV = 45;
+        let verticalPlacement = 'mid'; // 'sky', 'mid', 'ground'
+        const FOV_PORTRAIT = { h: 60, v: 75 };
+        const FOV_LANDSCAPE = { h: 90, v: 50 };
+        let currentFov = FOV_PORTRAIT;
 
         // --- DATA SOURCE ---
         const peaks = [
@@ -216,6 +225,7 @@
                 video.play();
                 await requestOrientationPermission();
                 startGps();
+                handleOrientationChange(); // Set initial FOV
                 startContainer.style.display = 'none';
                 topControls.classList.remove('hidden');
                 statusBar.classList.remove('hidden');
@@ -247,7 +257,7 @@
             }
         }
 
-        // --- SENSOR HANDLERS ---
+        // --- SENSOR & DEVICE HANDLERS ---
         function handleOrientation(event) {
             if (event.alpha !== null) {
                 phoneHeading = event.alpha;
@@ -265,6 +275,17 @@
 
         function handleGpsError(error) {
             console.error("GPS Error:", error.message);
+        }
+
+        // NEW: Handle phone rotation
+        function handleOrientationChange() {
+            if (window.innerHeight > window.innerWidth) {
+                // Portrait mode
+                currentFov = FOV_PORTRAIT;
+            } else {
+                // Landscape mode
+                currentFov = FOV_LANDSCAPE;
+            }
         }
 
         // --- CORE AR LOGIC ---
@@ -298,9 +319,9 @@
                     const horizontalAngleDiff = getAngleDifference(phoneHeading, peak.bearing);
                     const verticalAngleDiff = phonePitch - peak.angularElevation;
 
-                    if (Math.abs(horizontalAngleDiff) < HORIZONTAL_FOV / 2 && Math.abs(verticalAngleDiff) < VERTICAL_FOV / 2) {
-                        const x = 50 + (horizontalAngleDiff / (HORIZONTAL_FOV / 2)) * 50;
-                        const y = 50 - (verticalAngleDiff / (VERTICAL_FOV / 2)) * 50;
+                    if (Math.abs(horizontalAngleDiff) < currentFov.h / 2 && Math.abs(verticalAngleDiff) < currentFov.v / 2) {
+                        const x = 50 + (horizontalAngleDiff / (currentFov.h / 2)) * 50;
+                        const y = 50 - (verticalAngleDiff / (currentFov.v / 2)) * 50;
                         createLabel(peak, x, y);
                     }
                 });
@@ -330,8 +351,14 @@
         function createLabel(peak, x, y) {
             const label = document.createElement('div');
             label.className = 'peak-label';
+            
+            // NEW: Apply vertical placement offset
+            let yOffset = 0;
+            if (verticalPlacement === 'sky') yOffset = -20;
+            if (verticalPlacement === 'ground') yOffset = 20;
+            
             label.style.left = `${x}%`;
-            label.style.top = `${y}%`;
+            label.style.top = `${y + yOffset}%`;
 
             const maxDistOpacity = 150, minDistOpacity = 10;
             const opacity = Math.max(0.3, 1.0 - (peak.distanceKm - minDistOpacity) / (maxDistOpacity - minDistOpacity));
@@ -361,20 +388,28 @@
             labelStyleSelect.addEventListener('change', (e) => { currentLabelStyle = e.target.value; });
             distanceSlider.addEventListener('input', (e) => {
                 maxDistance = parseInt(e.target.value);
-                const dist = maxDistance;
-                const unit = currentUnits;
-                const displayDist = unit === 'mi' ? (dist * 0.621371).toFixed(0) : dist;
-                distanceValue.textContent = `${displayDist} ${unit}`;
+                updateDistanceLabel();
             });
+            placementControls.addEventListener('click', (e) => {
+                if (e.target.tagName === 'BUTTON') {
+                    verticalPlacement = e.target.dataset.value;
+                    placementControls.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
+                    e.target.classList.add('active');
+                }
+            });
+            window.addEventListener('orientationchange', handleOrientationChange);
         }
         
         function setUnits(unit) {
             currentUnits = unit;
-            unitKmBtn.classList.toggle('bg-blue-600', unit === 'km');
-            unitKmBtn.classList.toggle('text-white', unit === 'km');
-            unitMiBtn.classList.toggle('bg-blue-600', unit === 'mi');
-            unitMiBtn.classList.toggle('text-white', unit === 'mi');
+            unitKmBtn.classList.toggle('active', unit === 'km');
+            unitMiBtn.classList.toggle('active', unit !== 'km');
+            updateDistanceLabel();
+        }
+
+        function updateDistanceLabel() {
             const dist = maxDistance;
+            const unit = currentUnits;
             const displayDist = unit === 'mi' ? (dist * 0.621371).toFixed(0) : dist;
             distanceValue.textContent = `${displayDist} ${unit}`;
         }
